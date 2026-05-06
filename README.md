@@ -3,4 +3,7 @@ python -m venv .venv
 .venv\Scripts\activate   # или source .venv/bin/activate
 
 ### 2. Установить все зависимости
-pip install -r requirements.txt
+pip install mesa[rec]
+
+### 3. Запустить
+solara run app.py 
