@@ -7,3 +7,9 @@ pip install mesa[rec]
 
 ### 3. Запустить
 solara run app.py 
+
+
+# возможно фигня:
+pip install --upgrade solara mesa
+# для моих опытов:
+solara run .\template\firstStepApp.py
