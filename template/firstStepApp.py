@@ -24,11 +24,22 @@ class WalkerAgent(mesa.Agent):
         self.hardworking = self.random.randint(1, 10)  # Трудолюбивость от 1 до 10
 
     def step(self):
-        neighborhood = self.model.grid.get_neighborhood(
-            self.pos, moore=True, include_center=False
-        )
-        new_position = self.random.choice(neighborhood)
-        self.model.grid.move_agent(self, new_position)
+        # 50% шанс двигаться, но только если стамина > 0
+        if self.currentStamina > 0 and self.random.random() < 0.5:
+            # Действие А: Движение
+            neighborhood = self.model.grid.get_neighborhood(
+                self.pos, moore=True, include_center=False
+            )
+            new_position = self.random.choice(neighborhood)
+            self.model.grid.move_agent(self, new_position)
+            self.currentStamina = max(0, self.currentStamina - 1)
+        else:
+            # Действие Б: Отдых (либо выпало "стоять", либо стамина иссякла)
+            self.currentStamina += 5
+            # Ограничиваем стамину сверху, чтобы она не уходила в бесконечность
+            if self.currentStamina > self.maxStamina:
+                self.currentStamina = self.maxStamina
+
         self.steps += 1
 
 # 2. МОДЕЛЬ
