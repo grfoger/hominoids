@@ -73,7 +73,6 @@ class TorusModel(mesa.Model):
         self.grid = mesa.space.MultiGrid(width, height, torus=True)
         self.step_counter = 0
 
-        # 🔥 DataCollector: собирает данные автоматически после каждого step()
         self.datacollector = DataCollector(
             model_reporters={
                 "Step": lambda m: m.step_counter,
@@ -86,6 +85,8 @@ class TorusModel(mesa.Model):
                 "Здоровье": lambda a: a.currentHealth,
                 "Энергия": lambda a: a.currentStamina,
                 "Сытость": lambda a: a.satiety,
+                "ПотребностьСна": lambda a: a.needSleep,
+                "Спит": lambda a: a.sleep,
             }
         )
 
@@ -98,7 +99,6 @@ class TorusModel(mesa.Model):
     def step(self):
         self.agents.shuffle_do("step")
         self.step_counter += 1
-        # 🔥 Ключевая строка: собираем данные после каждого шага
         self.datacollector.collect(self)
 
 # 3. ВИЗУАЛИЗАЦИЯ
@@ -108,33 +108,6 @@ def agent_portrayal(agent):
         "size": 50,
         "marker": "o"
     }
-
-# 4 КАСТОМНЫЙ КОМПОНЕНТ: Таблица с данными агентов
-@solara.component
-def AgentTable(model):
-    agents = list(model.agents)
-    if not agents:
-        with solara.Card("📋 Данные агентов (F5 для обновление занчений)", style={"max-width": "700px"}):
-            solara.Text("⏳ Ожидание агентов...")
-        return
-
-    # Формируем данные
-    table_data = [
-        {
-            "ID": agent.unique_id,
-            "Здоровье": agent.currentHealth,
-            "Энергия": agent.currentStamina,
-            "Сытость": agent.satiety,
-        }
-        for agent in agents[:10]
-    ]
-
-    # 🔥 Преобразуем список в pandas DataFrame (требование solara.DataFrame)
-    df = pd.DataFrame(table_data)
-
-    with solara.Card("📋 Данные агентов (F5 для обновление занчений)", style={"max-width": "700px"}):
-        solara.Text(f"Шаг симуляции: **{model.step_counter}**", style={"font-weight": "bold", "margin-bottom": "10px"})
-        solara.DataFrame(df)
 
 model_params = {
     "num_agents": {
@@ -149,13 +122,12 @@ model_params = {
 
 initial_model = TorusModel()
 
-# 🔥 СБОРКА ИНТЕРФЕЙСА
+# Таблица временно убрана, оставлены сетка и графики
 Page = SolaraViz(
     model=initial_model,
     components=[
         make_space_component(agent_portrayal=agent_portrayal),
         make_plot_component(["Avg Stamina", "Avg Health", "Avg Satiety"]),
-        AgentTable,  # ← Добавляем нашу таблицу
     ],
     model_params=model_params,
     name="Random Walk on Torus",
