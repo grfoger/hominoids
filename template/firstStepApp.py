@@ -1,6 +1,7 @@
 import solara
 import mesa
-from mesa.visualization import SolaraViz, make_space_component
+from mesa.visualization import SolaraViz, make_space_component, make_plot_component
+from mesa.datacollection import DataCollector
 
 # 1. АГЕНТ
 class WalkerAgent(mesa.Agent):
@@ -17,6 +18,8 @@ class WalkerAgent(mesa.Agent):
         self.satiety = 100
         self.currentStamina = self.maxStamina
         self.currentHealth = self.maxHealth
+        self.needSleep = 0
+        self.sleep = False
 
         # Скиллы
         self.gatherer = self.random.randint(1, 10)
@@ -25,18 +28,42 @@ class WalkerAgent(mesa.Agent):
         self.hardworking = self.random.randint(1, 10)
 
     def step(self):
-        if self.currentStamina > 0 and self.random.random() < 0.5:
-            neighborhood = self.model.grid.get_neighborhood(
-                self.pos, moore=True, include_center=False
-            )
-            new_position = self.random.choice(neighborhood)
-            self.model.grid.move_agent(self, new_position)
-            self.currentStamina = max(0, self.currentStamina - 1)
-        else:
-            self.currentStamina += 5
-            if self.currentStamina > self.maxStamina:
-                self.currentStamina = self.maxStamina
 
+        # 1. Определяем, обязан ли агент спать
+        must_sleep = False
+
+        if self.needSleep == 0: # Если мы выспались, то мы просыпаемся
+            self.sleep = False
+
+        if self.needSleep != 0:  # Если мы ещё не выспались...
+            if self.needSleep >= 16 or self.sleep:   # Если мы очень хотим спать или если мы уже спим...
+                must_sleep = True # , то мы обязаны выбрать сон
+
+        if must_sleep:
+            # 🔹 ДЕЙСТВИЕ: СОН
+            self.needSleep = max(0, self.needSleep - 2)
+            self.currentStamina = min(self.maxStamina, self.currentStamina + 10)
+
+        else:
+            # 🔹 ДЕЙСТВИЕ: ДВИЖЕНИЕ или ОТДЫХ (50/50)
+            # Двигаться можно только если стамина > 0
+            if self.currentStamina > 0 and self.random.random() < 0.5:
+                neighborhood = self.model.grid.get_neighborhood(
+                    self.pos, moore=True, include_center=False
+                )
+                new_position = self.random.choice(neighborhood)
+                self.model.grid.move_agent(self, new_position)
+                self.currentStamina = max(0, self.currentStamina - 1)
+            else:
+                self.currentStamina += 5
+                if self.currentStamina > self.maxStamina:
+                    self.currentStamina = self.maxStamina
+
+            # Так как действие отличное от сна, needSleep растёт
+            self.needSleep += 1
+
+        # 2. В КОНЦЕ КАЖДОГО ШАГА: сытость уменьшается на 1 (мин 0)
+        self.satiety = max(0, self.satiety - 1)
         self.steps += 1
 
 # 2. МОДЕЛЬ
@@ -44,7 +71,23 @@ class TorusModel(mesa.Model):
     def __init__(self, num_agents=5, width=10, height=10):
         super().__init__()
         self.grid = mesa.space.MultiGrid(width, height, torus=True)
-        self.step_counter = 0  # ← Добавлено для реактивности UI
+        self.step_counter = 0
+
+        # 🔥 DataCollector: собирает данные автоматически после каждого step()
+        self.datacollector = DataCollector(
+            model_reporters={
+                "Step": lambda m: m.step_counter,
+                "Avg Stamina": lambda m: sum(a.currentStamina for a in m.agents) / len(m.agents) if m.agents else 0,
+                "Avg Health": lambda m: sum(a.currentHealth for a in m.agents) / len(m.agents) if m.agents else 0,
+                "Avg Satiety": lambda m: sum(a.satiety for a in m.agents) / len(m.agents) if m.agents else 0,
+            },
+            agent_reporters={
+                "ID": lambda a: a.unique_id,
+                "Здоровье": lambda a: a.currentHealth,
+                "Энергия": lambda a: a.currentStamina,
+                "Сытость": lambda a: a.satiety,
+            }
+        )
 
         for _ in range(num_agents):
             agent = WalkerAgent(self)
@@ -55,56 +98,43 @@ class TorusModel(mesa.Model):
     def step(self):
         self.agents.shuffle_do("step")
         self.step_counter += 1
+        # 🔥 Ключевая строка: собираем данные после каждого шага
+        self.datacollector.collect(self)
 
 # 3. ВИЗУАЛИЗАЦИЯ
 def agent_portrayal(agent):
-    # Возвращаем dict (работает, но с предупреждением о депрекации — это нормально)
     return {
         "color": "tab:red",
         "size": 50,
         "marker": "o"
     }
 
+# 4 КАСТОМНЫЙ КОМПОНЕНТ: Таблица с данными агентов
 @solara.component
-def AgentStats(model):
-    # Просто читаем данные из модели.
-    # SolaraViz должен вызывать этот компонент после каждого model.step()
-
-    # Отладка: проверяем, вызывается ли компонент
-    print(f"[DEBUG] AgentStats вызван. Шаг: {model.step_counter}, Агентов: {len(list(model.agents))}")
-
+def AgentTable(model):
     agents = list(model.agents)
     if not agents:
-        return solara.Text("Нет агентов")
+        with solara.Card("📋 Данные агентов (F5 для обновление занчений)", style={"max-width": "700px"}):
+            solara.Text("⏳ Ожидание агентов...")
+        return
 
-    avg_stamina = sum(a.currentStamina for a in agents) / len(agents)
-    avg_health = sum(a.currentHealth for a in agents) / len(agents)
-    avg_satiety = sum(a.satiety for a in agents) / len(agents)
+    # Формируем данные
+    table_data = [
+        {
+            "ID": agent.unique_id,
+            "Здоровье": agent.currentHealth,
+            "Энергия": agent.currentStamina,
+            "Сытость": agent.satiety,
+        }
+        for agent in agents[:10]
+    ]
 
-    with solara.Card("📊 Статистика агентов", style={"max-width": "600px"}):
-        with solara.Row(style={"margin-bottom": "10px", "font-weight": "bold"}):
-            solara.Text(f"👥 Агентов: {len(agents)}")
-            solara.Text(f"💪 Средняя энергия: {avg_stamina:.1f}")
-            solara.Text(f"❤️ Среднее здоровье: {avg_health:.1f}")
-            solara.Text(f"🍎 Средняя сытость: {avg_satiety:.1f}")
+    # 🔥 Преобразуем список в pandas DataFrame (требование solara.DataFrame)
+    df = pd.DataFrame(table_data)
 
-        solara.Text("─" * 50, style={"margin": "5px 0", "color": "#888"})
-
-        with solara.Row(style={"font-weight": "bold", "background-color": "#f0f0f0", "padding": "5px"}):
-            solara.Text("№", style={"width": "30px"})
-            solara.Text("Здоровье", style={"width": "80px"})
-            solara.Text("Энергия", style={"width": "80px"})
-            solara.Text("Сытость", style={"width": "70px"})
-
-        for agent in agents[:10]:
-            with solara.Row(style={"padding": "2px 5px"}):
-                solara.Text(f"{agent.unique_id}", style={"width": "30px"})
-                solara.Text(f"{agent.currentHealth}", style={"width": "80px"})
-                solara.Text(f"{agent.currentStamina}", style={"width": "80px"})
-                solara.Text(f"{agent.satiety}", style={"width": "70px"})
-
-        if len(agents) > 10:
-            solara.Text(f"... и ещё {len(agents) - 10} агентов", style={"font-style": "italic", "margin-top": "5px"})
+    with solara.Card("📋 Данные агентов (F5 для обновление занчений)", style={"max-width": "700px"}):
+        solara.Text(f"Шаг симуляции: **{model.step_counter}**", style={"font-weight": "bold", "margin-bottom": "10px"})
+        solara.DataFrame(df)
 
 model_params = {
     "num_agents": {
@@ -119,11 +149,13 @@ model_params = {
 
 initial_model = TorusModel()
 
+# 🔥 СБОРКА ИНТЕРФЕЙСА
 Page = SolaraViz(
     model=initial_model,
     components=[
         make_space_component(agent_portrayal=agent_portrayal),
-        AgentStats,
+        make_plot_component(["Avg Stamina", "Avg Health", "Avg Satiety"]),
+        AgentTable,  # ← Добавляем нашу таблицу
     ],
     model_params=model_params,
     name="Random Walk on Torus",
