@@ -2,6 +2,8 @@ import solara
 import mesa
 from mesa.visualization import SolaraViz, make_space_component, make_plot_component
 from mesa.datacollection import DataCollector
+from config import AGENT, SLEEP, ACTIONS, GATHER, BANANA, MODEL
+# TODO, заменить магические числа на константы из config.py
 
 # ─────────────────────────────────────────────────────────────
 # КЛАСС ЕДЫ (Банан)
@@ -23,23 +25,30 @@ class WalkerAgent(mesa.Agent):
         self.steps = 0
 
         # Физические свойства:
-        self.endurance = self.random.randint(1, 10) # Выносливость
+        self.endurance = self._roll_trait(1, 10) # Выносливость
         self.maxStamina = 50 + self.endurance * 2   # Запас энергии / стамина
         self.maxHealth = 50 + self.endurance * 2    # Здоровье
         self.inventory = []                         # Инвентарь, массив с объектами
+        self.maxCapacity = 50 + self.endurance * 2  # Сколько может переносить (смесь веса и объёма)
 
         # Текущие показатели
-        self.satiety = 100                          # Сытость
-        self.currentStamina = self.maxStamina
-        self.currentHealth = self.maxHealth
+        self.current_action = "rest"               # При рождении мы отдыхаем
+        self.satiety = AGENT.initial_satiety       # Сытость. Пример взятия константы из config.py
+        self.stamina = self.maxStamina
+        self.health = self.maxHealth
         self.needSleep = 0                          # Накопление невысыпания
         self.sleeping = False                       # Спит в текущий момент?
+        self.capacity = self.maxCapacity        # Сколько ещё может вещей набрать, при рождении - максимум
 
         # Скиллы
-        self.gatherer = self.random.randint(1, 10)  # Навык собирательства
+        self.gatherer = self._roll_trait(1, 10)  # Навык собирательства
 
         # Ментальные характеристики
-        self.hardworking = self.random.randint(1, 10)   # Трудолюбие
+        self.hardworking = self._roll_trait(1, 10)   # Трудолюбие
+
+    def _roll_trait(self, min_val, max_val):
+        val = int(round(self.random.triangular(min_val, max_val)))
+        return max(min_val, min(max_val, val))
 
     def step(self):
         # 1. Этап принятия решения
@@ -49,16 +58,17 @@ class WalkerAgent(mesa.Agent):
         self.execute_action(chosen_action)
 
         # 3. Универсальные обновления в конце шага
-        if chosen_action != "sleep":
-            self.needSleep += 1
+        if chosen_action != "sleep":  # Если мы не спали, то
+            self.needSleep += 1       # невысыпание растёт
+            self.sleeping = False     # Статус: не спим
 
-        self.satiety = max(0, self.satiety - 1)
+        self.satiety = max(0, self.satiety - 1)  # Сытость уменьшается
         self.steps += 1
 
 
-# ─────────────────────────────────────────────────────────────
-# 🧠 ЭТАП РЕШЕНИЯ: возвращает строку-идентификатор действия
-# ─────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    # 🧠 ЭТАП РЕШЕНИЯ: возвращает строку-идентификатор действия
+    # ─────────────────────────────────────────────────────────────
     def decide_action(self):
         # БАЗОВЫЕ ВЕСА (по умолчанию все равны 1)
         weights = {
@@ -75,17 +85,17 @@ class WalkerAgent(mesa.Agent):
 
         # Коррекция весов по сытости
         if self.satiety <= 5:
-            target_food_weight = 10
+            target_eating_weight = 10
         elif self.satiety <= 20:
-            target_food_weight = 3
+            target_eating_weight = 3
         else:
-            target_food_weight = 1
+            target_eating_weight = 1
 
         if has_food:
-            weights["eat"] = target_food_weight
+            weights["eat"] = target_eating_weight
         else:
             weights["eat"] = 0
-            weights["gather"] = target_food_weight  # Перенос веса на сбор, если в инвентаре нет еды
+            weights["gather"] = target_eating_weight  # Перенос веса на сбор, если в инвентаре нет еды
 
         # Коррекция весов сна
         if self.needSleep == 0: # Если мы выспались, то мы просыпаемся
@@ -94,43 +104,23 @@ class WalkerAgent(mesa.Agent):
             if self.needSleep >= 16 or self.sleeping:   # Если мы очень хотим спать или если мы уже спим...
                 weights["sleep"] = 3
 
-        # # 1. Определяем, обязан ли агент спать
-        # must_sleep = False
-        #
-        # if self.needSleep == 0: # Если мы выспались, то мы просыпаемся
-        #     self.sleeping = False
-        #
-        # if self.needSleep != 0:  # Если мы ещё не выспались...
-        #     if self.needSleep >= 16 or self.sleeping:   # Если мы очень хотим спать или если мы уже спим...
-        #         must_sleep = True # , то мы обязаны выбрать сон
-        #
-        # if must_sleep:
-        #     # 🔹 ДЕЙСТВИЕ: СОН
-        #     self.sleeping = True   # Засыпаем
-        #     self.needSleep = max(0, self.needSleep - 2) # Невысыпание уменьшается на 2
-        #     self.currentStamina = min(self.maxStamina, self.currentStamina + 10) # Растёт запас энергии
-        #
-        # else:
-        #     # 🔹 ДЕЙСТВИЕ: ДВИЖЕНИЕ или ОТДЫХ (50/50)
-        #     # Двигаться можно только если стамина > 0
-        #     if self.currentStamina > 0 and self.random.random() < 0.5:
-        #         neighborhood = self.model.grid.get_neighborhood(
-        #             self.pos, moore=True, include_center=False
-        #         )
-        #         new_position = self.random.choice(neighborhood)
-        #         self.model.grid.move_agent(self, new_position)
-        #         self.currentStamina = max(0, self.currentStamina - 10) # Запас энергии уменьшается
-        #     else: # действие отдыха
-        #         self.currentStamina += 5   # восстанавливаем запас энергии
-        #         if self.currentStamina > self.maxStamina:
-        #             self.currentStamina = self.maxStamina
-        #
-        #     # Так как действие отличное от сна, needSleep растёт
-        #     self.needSleep += 1
-        #
-        # # 2. В КОНЦЕ КАЖДОГО ШАГА: сытость уменьшается на 1 (мин 0)
-        # self.satiety = max(0, self.satiety - 1)
-        # self.steps += 1
+        # Коррекция весов отдыха
+        if self.stamina <= 5:
+            weights["rest"] = 9
+        if self.stamina <= 10:
+            weights["rest"] = 5
+        if self.stamina <= 30:
+            weights["rest"] = 3
+
+        # Коррекция рабочих занятий из-за показателя трудолюбия
+        hw = self.hardworking
+        if hw > 6:
+            # За каждую единицу выше 6 увеличиваем на 10% от текущего веса
+            weights["gather"] *= (1 + (hw - 6) * 0.1)
+        elif hw < 5:
+            # За каждую единицу ниже 5 уменьшаем на 10% от текущего веса
+            weights["gather"] *= (1 - (5 - hw) * 0.1)
+        # Если hw == 5 или 6 → вес остаётся без изменений
 
         # ПРЕОБРАЗОВАНИЕ ВЕСОВ В ДИАПАЗОНЫ 1d100
         total_weight = sum(weights.values())
@@ -169,7 +159,7 @@ class WalkerAgent(mesa.Agent):
             "gather": self._do_gather,
             "move": self._do_move,
             "rest": self._do_rest,
-            # "eat": self._do_eat,      # ← Добавить новое действие: 1 строка
+            "eat": self._do_eat,
             # "trade": self._do_trade,  # ← Ещё одно: 1 строка
         }
         executor = action_map.get(action_name)
@@ -181,34 +171,55 @@ class WalkerAgent(mesa.Agent):
     # ─────────────────────────────────────────────────────────────
     # 🛠 ЛОГИКА КОНКРЕТНЫХ ДЕЙСТВИЙ (вынесена в отдельные методы)
     # ─────────────────────────────────────────────────────────────
+    def _do_eat(self):
+        self.current_action = "eat"
+        # Поиск еды в инвентаре
+        food_items = [item for item in self.inventory if hasattr(item, 'calories')]
+        if not food_items:
+            self._do_rest()
+            return
+        # Выбор предмета с макс. desirability (случайный при равенстве)
+        max_des = max(item.desirability for item in food_items)
+        chosen = self.random.choice([item for item in food_items if item.desirability == max_des])
+        # Удаление из инвентаря
+        self.inventory.remove(chosen)
+        # Облегчение
+        self.capacity  = min(self.capacity + chosen.load, self.maxCapacity)
+        # Повышение сытости (не выше лимита из конфига)
+        self.satiety = min(self.satiety + chosen.calories, AGENT.max_satiety)
+
     def _do_sleep(self):
+        self.current_action = "sleep"
         self.sleeping = True   # Засыпаем
         self.needSleep = max(0, self.needSleep - 2) # Невысыпание уменьшается
-        self.currentStamina = min(self.maxStamina, self.currentStamina + 10) # Растёт запас энергии
+        self.stamina = min(self.maxStamina, self.stamina + 10) # Растёт запас энергии
 
     def _do_gather(self):
+        self.current_action = "gather"
         # Да, эта проверка уже есть при выборе решения. Но я считаю, что иногда можно принимать обречённые на провал решения.
-        if self.currentStamina < 10:
+        if self.stamina < 10:
             self._do_rest()
             return
 
-        self.currentStamina = max(0, self.currentStamina - 10) # Стамина уменьшается
+        self.stamina = max(0, self.stamina - 10) # Стамина уменьшается
         roll = self.random.randint(1, 100) + self.gatherer
         difficulty = 100 - self.model.get_abundance(self.pos)
 
-        if roll > difficulty and self.freeCapacity >= 5:  # 5 = load банана
+        if roll > difficulty and self.capacity >= 5:  # 5 = load банана
             from types import SimpleNamespace
             self.inventory.append(SimpleNamespace(name="Банан", calories=10, load=5, desirability=75))
-            self.freeCapacity -= 5
+            self.capacity -= 5
 
     def _do_move(self):
+        self.current_action = "move"
         neighborhood = self.model.grid.get_neighborhood(self.pos, moore=True, include_center=False)
         new_position = self.random.choice(neighborhood)
         self.model.grid.move_agent(self, new_position)
-        self.currentStamina = max(0, self.currentStamina - 1)
+        self.stamina = max(0, self.stamina - 5)
 
     def _do_rest(self):
-        self.currentStamina = min(self.maxStamina, self.currentStamina + 5)
+        self.current_action = "rest"
+        self.stamina = min(self.maxStamina, self.stamina + 5)
 
 # ─────────────────────────────────────────────────────────────
 # 2. МОДЕЛЬ
@@ -228,19 +239,19 @@ class TorusModel(mesa.Model):
         self.datacollector = DataCollector(
             model_reporters={
                 "Step": lambda m: m.step_counter,
-                "Avg Stamina": lambda m: sum(a.currentStamina for a in m.agents) / len(m.agents) if m.agents else 0,
-                "Avg Health": lambda m: sum(a.currentHealth for a in m.agents) / len(m.agents) if m.agents else 0,
+                "Avg Stamina": lambda m: sum(a.stamina for a in m.agents) / len(m.agents) if m.agents else 0,
+                "Avg Health": lambda m: sum(a.health for a in m.agents) / len(m.agents) if m.agents else 0,
                 "Avg Satiety": lambda m: sum(a.satiety for a in m.agents) / len(m.agents) if m.agents else 0,
             },
             agent_reporters={
                 "ID": lambda a: a.unique_id,
-                "Здоровье": lambda a: a.currentHealth,
-                "Энергия": lambda a: a.currentStamina,
+                "Здоровье": lambda a: a.health,
+                "Энергия": lambda a: a.stamina,
                 "Сытость": lambda a: a.satiety,
                 "ПотребностьСна": lambda a: a.needSleep,
-                "Спит": lambda a: a.sleep,
+                "Спит": lambda a: a.sleeping,
                 "ПредметовВИнвентаре": lambda a: len(a.inventory),
-                "ОстатокГрузоподъёмности": lambda a: a.free_capacity,
+                "ОстатокГрузоподъёмности": lambda a: a.capacity,
             }
         )
 
@@ -264,10 +275,18 @@ class TorusModel(mesa.Model):
 # 3. ВИЗУАЛИЗАЦИЯ
 # ─────────────────────────────────────────────────────────────
 def agent_portrayal(agent):
+    styles = {
+        "sleep":  {"color": "midnightblue", "marker": "v"},
+        "eat":    {"color": "orange",        "marker": "p"},
+        "gather": {"color": "forestgreen",   "marker": "^"},
+        "move":   {"color": "tab:red",       "marker": ">"},
+        "rest":   {"color": "gray",          "marker": "s"},
+    }
+    # Возвращаем только поддерживаемые ключи: color, size, marker
     return {
-        "color": "tab:red",
+        "color": styles.get(agent.current_action, styles["rest"])["color"],
         "size": 50,
-        "marker": "o"
+        "marker": styles.get(agent.current_action, styles["rest"])["marker"]
     }
 
 model_params = {
