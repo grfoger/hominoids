@@ -1,15 +1,20 @@
-### 1. Создать и активировать своё виртуальное окружение
-python -m venv .venv
-.venv\Scripts\activate   # или source .venv/bin/activate
+### 0. Установить uv (один раз)
+irm https://astral.sh/uv/install.ps1 | iex   # PowerShell (Windows)
+# или: curl -LsSf https://astral.sh/uv/install.sh | sh   (macOS/Linux)
 
-### 2. Установить все зависимости
-pip install mesa[rec]
+### 1. Инициализировать проект (один раз, если ещё не сделано)
+uv init
+
+### 2. Установить зависимости
+uv add "mesa[rec]" solara
 
 ### 3. Запустить
-solara run app.py 
+uv run solara run app.py
 
+# для опытов:
+uv run solara run .\template\firstStepApp.py
 
-# возможно фигня:
-pip install --upgrade solara mesa
-# для моих опытов:
-solara run .\template\firstStepApp.py
+# обновить зависимости:
+uv lock --upgrade
+uv sync
+

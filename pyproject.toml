@@ -1,0 +1,10 @@
+[project]
+name = "hominoids-1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "mesa[rec]>=3.5.1",
+    "solara>=1.60.1",
+]
