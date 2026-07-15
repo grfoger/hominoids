@@ -9,10 +9,11 @@ uv init
 uv add "mesa[rec]" solara
 
 ### 3. Запустить
-uv run solara run app.py
+uv run solara run .\src\viz.py
 
-# для опытов:
-uv run solara run .\template\firstStepApp.py
+# для примера:
+uv run solara run .\examples\ant-colony.py
+uv run solara run .\examples\templateApp.py
 
 # обновить зависимости:
 uv lock --upgrade
