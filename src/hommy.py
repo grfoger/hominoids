@@ -33,6 +33,132 @@ class FoodItem:
 BANANA_PROTO = FoodItem("Банан", calories=10, load=5, desirability=75)
 
 # ─────────────────────────────────────────────────────────────
+# 🎭 СИСТЕМА ДЕЙСТВИЙ (Command/Strategy)
+# ─────────────────────────────────────────────────────────────
+class Action:
+    """Базовый класс действия."""
+    name = "base"
+    is_group = False  # одиночное по умолчанию
+
+    def can_execute(self, agent) -> bool:
+        """Можно ли выполнить действие сейчас?"""
+        return True
+
+    def execute(self, agent):
+        """Основная логика действия."""
+        raise NotImplementedError
+
+    def fallback(self, agent):
+        """Что делать, если действие нельзя выполнить."""
+        ACTION_REGISTRY["rest"].execute(agent)
+
+
+class RestAction(Action):
+    name = "rest"
+
+    def execute(self, agent):
+        agent.current_action = "rest"
+        agent.stamina = min(agent.maxStamina, agent.stamina + 5)
+
+
+class SleepAction(Action):
+    name = "sleep"
+
+    def execute(self, agent):
+        agent.current_action = "sleep"
+        agent.sleeping = True
+        agent.needSleep = max(0, agent.needSleep - 2)
+        agent.stamina = min(agent.maxStamina, agent.stamina + 10)
+
+
+class MoveAction(Action):
+    name = "move"
+
+    def execute(self, agent):
+        agent.current_action = "move"
+        neighborhood = agent.model.grid.get_neighborhood(
+            agent.pos, moore=True, include_center=False
+        )
+        new_position = agent.random.choice(neighborhood)
+        agent.model.grid.move_agent(agent, new_position)
+        agent.stamina = max(0, agent.stamina - 5)
+
+
+class GatherAction(Action):
+    name = "gather"
+
+    def can_execute(self, agent) -> bool:
+        return agent.stamina >= 10 and agent.capacity >= 5
+
+    def execute(self, agent):
+        agent.current_action = "gather"
+
+        if not self.can_execute(agent):
+            self.fallback(agent)
+            return
+
+        agent.stamina = max(0, agent.stamina - 10)
+        roll = agent.random.randint(1, 100) + agent.gatherer
+        difficulty = 100 - agent.model.get_abundance(agent.pos)
+
+        if roll > difficulty:
+            from types import SimpleNamespace
+            agent.inventory.append(SimpleNamespace(
+                name="Банан", calories=10, load=5, desirability=75
+            ))
+            agent.capacity -= 5
+
+
+class EatAction(Action):
+    name = "eat"
+
+    def can_execute(self, agent) -> bool:
+        return any(hasattr(item, 'calories') for item in agent.inventory)
+
+    def execute(self, agent):
+        agent.current_action = "eat"
+
+        if not self.can_execute(agent):
+            self.fallback(agent)
+            return
+
+        food_items = [item for item in agent.inventory if hasattr(item, 'calories')]
+        max_des = max(item.desirability for item in food_items)
+        chosen = agent.random.choice(
+            [item for item in food_items if item.desirability == max_des]
+        )
+        agent.inventory.remove(chosen)
+        agent.capacity = min(agent.capacity + chosen.load, agent.maxCapacity)
+        agent.satiety = min(agent.satiety + chosen.calories, AGENT.max_satiety)
+
+
+class CommunicateAction(Action):
+    name = "communicate"
+    is_group = True  # ← помечаем как групповое
+
+    def can_execute(self, agent) -> bool:
+        """Групповое действие требует хотя бы одного соседа."""
+        neighbors = agent.model.grid.get_neighborhood(
+            agent.pos, moore=True, include_center=False
+        )
+        return any(agent.model.grid.get_cell_list_contents(neighbors))
+
+    def execute(self, agent):
+        agent.current_action = "communicate"
+        agent.socialHunger = max(0, agent.socialHunger - 50)
+
+
+# 🔥 Реестр всех действий (единая точка правки)
+ACTION_REGISTRY = {
+    "rest":      RestAction(),
+    "sleep":     SleepAction(),
+    "move":      MoveAction(),
+    "gather":    GatherAction(),
+    "eat":       EatAction(),
+    "communicate": CommunicateAction(),
+}
+
+# ─────────────────────────────────────────────────────────────
 # 1. АГЕНТ
 # ─────────────────────────────────────────────────────────────
 class WalkerAgent(mesa.Agent):
@@ -69,27 +195,27 @@ class WalkerAgent(mesa.Agent):
         return max(min_val, min(max_val, val))
 
     def step(self):
-        # Принимаем решение и сразу исполняем его
+        # 1. Принимаем решение
         chosen_action = self.decide_action()
+        # 2. Исполняем
         self.execute_action(chosen_action)
 
-        if self.chosen_action != "sleep":  # Если мы не спим, то
-            self.needSleep += 1             # невысыпание растёт
+        # 3. Универсальные обновления в конце шага
+        if chosen_action != "sleep":   # Если мы не спим, то
+            self.needSleep += 1         # невысыпание растёт
             self.sleeping = False           # Статус: не спим
 
-        self.satiety = max(0, self.satiety - 1)  # Сытость уменьшается
+        self.satiety = max(0, self.satiety - 1)
 
-        if self.chosen_action != "communicate":
-            # Если мы не общались, то хотим общаться (ограничиваем сверху)
+        if chosen_action != "communicate":  # Если мы не общались, то хотим общаться
             self.socialHunger = min(self.maxSocialHunger, self.socialHunger + 5)
 
         self.steps += 1
 
     # ─────────────────────────────────────────────────────────────
-    # 🧠 ЭТАП РЕШЕНИЯ: возвращает строку-идентификатор действия
+    # 🧠 ЭТАП РЕШЕНИЯ
     # ─────────────────────────────────────────────────────────────
     def decide_action(self, weight_mods=None):
-        # БАЗОВЫЕ УРОВНИ ЖЕЛАНИЯ (из словаря PRIORITY)
         desires = {
             "communicate": PRIORITY["why_not"],
             "sleep":       PRIORITY["why_not"],
@@ -109,7 +235,7 @@ class WalkerAgent(mesa.Agent):
             desires["eat"] = PRIORITY["unlikely"]
 
         if not has_food:
-            desires["eat"] = PRIORITY["impossible"]  # Есть нечего
+            desires["eat"] = PRIORITY["impossible"] # Есть нечего
             # Если есть нечего, желание искать еду растёт
             if self.satiety <= 5:
                 desires["gather"] = PRIORITY["at_all_costs"]
@@ -146,33 +272,33 @@ class WalkerAgent(mesa.Agent):
         elif self.socialHunger < 0.3 * self.maxSocialHunger:
             desires["communicate"] = PRIORITY["unlikely"]
 
-        # Коррекция рабочих занятий из-за показателя Трудолюбия
+        # Трудолюбие
         hw = self.hardworking
         if hw > 6:
             desires["gather"] *= (1 + (hw - 6) * 0.1)
         elif hw < 5:
             desires["gather"] *= (1 - (5 - hw) * 0.1)
 
-        # Коррекция социальных занятий из-за показателя Социальности
+        # Социальность
         sc = self.sociality
         if sc > 6:
             desires["communicate"] *= (1 + (sc - 6) * 0.1)
         elif sc < 5:
             desires["communicate"] *= (1 - (5 - sc) * 0.1)
 
-        # ПРИМЕНЕНИЕ ВНЕШНИХ МОДИФИКАТОРОВ (зарезервировано на будущее)
+        # Внешние модификаторы (для будущей координации)
         if weight_mods:
             for action, mult in weight_mods.items():
                 if action in desires:
                     desires[action] *= mult
 
-        # ПРОВЕРКА КОНТЕКСТА (нет соседей -> communicate = never)
+        # Проверка контекста (нет соседей -> communicate = never)
         neighbors = self.model.grid.get_neighborhood(self.pos, moore=True, include_center=False)
         has_neighbors = any(self.model.grid.get_cell_list_contents(neighbors))
         if not has_neighbors:
             desires["communicate"] = PRIORITY["never"]
 
-        # ПРЕОБРАЗОВАНИЕ В ВЕСА И БРОСОК
+        # Бросок
         total_weight = sum(desires.values())
         if total_weight == 0:
             return "rest"
@@ -188,84 +314,40 @@ class WalkerAgent(mesa.Agent):
 
         roll = self.random.uniform(1.0, 100.0)
 
-        # 🔍 ОТЛАДКА: теперь ПОСЛЕ броска
+        # Выбор
+        chosen = "rest"
+        for low, high, action in ranges:
+            if low <= roll <= high:
+                chosen = action
+                break
+
+        # 🔍 ОТЛАДКА для агента #1
         if self.unique_id == 1:
             print(f"\n[Agent 1] Step {self.steps} | Roll: {roll:.2f}")
             print(f"  Stamina: {self.stamina}, Satiety: {self.satiety}, socialHunger: {self.socialHunger}")
             print(f"  Desires: { {k: round(v,2) for k,v in desires.items()} }")
             print(f"  Ranges: {[(f'{a}:{round(l,1)}-{round(h,1)}') for l,h,a in ranges]}")
+            print(f"  Chosen action is: {chosen}")
 
-        for low, high, action in ranges:
-            if low <= roll <= high:
-                return action
-        return "rest"
+        return chosen
 
     # ─────────────────────────────────────────────────────────────
     # ⚙️ ЭТАП ИСПОЛНЕНИЯ: диспетчер действий
     # ─────────────────────────────────────────────────────────────
     def execute_action(self, action_name):
-        action_map = {
-            "communicate": self._do_communicate,
-            "sleep": self._do_sleep,
-            "gather": self._do_gather,
-            "move": self._do_move,
-            "rest": self._do_rest,
-            "eat": self._do_eat,
-        }
-        executor = action_map.get(action_name)
-        if executor:
-            executor()
-        else:
-            raise ValueError(f"Unknown action: {action_name}")
+        action = ACTION_REGISTRY.get(action_name)
 
-    # ─────────────────────────────────────────────────────────────
-    # 🛠 ЛОГИКА КОНКРЕТНЫХ ДЕЙСТВИЙ
-    # ─────────────────────────────────────────────────────────────
-    def _do_eat(self):
-        self.current_action = "eat"
-        food_items = [item for item in self.inventory if hasattr(item, 'calories')]
-        if not food_items:
-            self._do_rest()
+        # Неизвестное действие → отдых (защита)
+        if action is None:
+            ACTION_REGISTRY["rest"].execute(self)
             return
-        max_des = max(item.desirability for item in food_items)
-        chosen = self.random.choice([item for item in food_items if item.desirability == max_des])
-        self.inventory.remove(chosen)
-        self.capacity = min(self.capacity + chosen.load, self.maxCapacity)
-        self.satiety = min(self.satiety + chosen.calories, AGENT.max_satiety)
 
-    def _do_sleep(self):
-        self.current_action = "sleep"
-        self.sleeping = True
-        self.needSleep = max(0, self.needSleep - 2)
-        self.stamina = min(self.maxStamina, self.stamina + 10)
-
-    def _do_gather(self):
-        self.current_action = "gather"
-        if self.stamina < 10:
-            self._do_rest()
+        # Групповое действие без партнёра → fallback
+        if action.is_group and not action.can_execute(self):
+            action.fallback(self)
             return
-        self.stamina = max(0, self.stamina - 10)
-        roll = self.random.randint(1, 100) + self.gatherer
-        difficulty = 100 - self.model.get_abundance(self.pos)
-        if roll > difficulty and self.capacity >= 5:
-            from types import SimpleNamespace
-            self.inventory.append(SimpleNamespace(name="Банан", calories=10, load=5, desirability=75))
-            self.capacity -= 5
 
-    def _do_move(self):
-        self.current_action = "move"
-        neighborhood = self.model.grid.get_neighborhood(self.pos, moore=True, include_center=False)
-        new_position = self.random.choice(neighborhood)
-        self.model.grid.move_agent(self, new_position)
-        self.stamina = max(0, self.stamina - 5)
-
-    def _do_rest(self):
-        self.current_action = "rest"
-        self.stamina = min(self.maxStamina, self.stamina + 5)
-
-    def _do_communicate(self):
-        self.current_action = "communicate"
-        self.socialHunger = max(0, self.socialHunger - 50)
+        action.execute(self)
 
 # ─────────────────────────────────────────────────────────────
 # 2. МОДЕЛЬ

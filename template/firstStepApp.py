@@ -194,6 +194,7 @@ class WalkerAgent(mesa.Agent):
             print(f"  Stamina: {self.stamina}, Satiety: {self.satiety}, socialHunger: {self.socialHunger}")
             print(f"  Desires: { {k: round(v,2) for k,v in desires.items()} }")
             print(f"  Ranges: {[(f'{a}:{round(l,1)}-{round(h,1)}') for l,h,a in ranges]}")
+            print(f"  Chosen action is: {action}")
 
         for low, high, action in ranges:
             if low <= roll <= high:
