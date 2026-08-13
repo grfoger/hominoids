@@ -12,7 +12,7 @@ uv add "mesa[rec]" solara
 uv run solara run .\src\viz.py
 
 # для примера:
-uv run solara run .\examples\ant-colony.py
+uv run solara run .\examples\ants\ant-colony.py
 uv run solara run .\examples\templateApp.py
 
 # обновить зависимости:
